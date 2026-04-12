@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#185FA5</color>
+    <color name="colorPrimaryDark">#0B1C31</color>
+    <color name="colorAccent">#B5D4F4</color>
+
+    <!-- Semi-transparent colors for navigation bars (10% opacity) -->
+    <color name="semi_transparent_status">#1A000000</color>
+    <color name="semi_transparent_nav">#1A000000</color>
+</resources>

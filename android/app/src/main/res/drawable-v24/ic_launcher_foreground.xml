@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- DroidCore ALP shield foreground for v24+ adaptive icons -->
+    <path
+        android:fillColor="#185FA5"
+        android:pathData="M54,20 L82,34 L82,68 L54,82 L26,68 L26,34 Z"/>
+    <!-- Mountain peak outline -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#B5D4F4"
+        android:strokeWidth="2"
+        android:pathData="M54,32 L72,60 L36,60 Z"/>
+    <!-- Snow cap -->
+    <path
+        android:fillColor="#B5D4F4"
+        android:pathData="M54,32 L62,46 L46,46 Z"/>
+</vector>
