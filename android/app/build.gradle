@@ -44,8 +44,8 @@ android {
             keyPassword 'android'
         }
         release {
-            // Use release.keystore if provided via local.properties; fall back to debug keystore for quick release builds
-            storeFile file('release.keystore')
+            // Use explicit RELEASE_STORE_FILE if provided; otherwise fall back to debug.keystore for quick release builds
+            storeFile file(keystoreProperties['RELEASE_STORE_FILE'] ?: 'debug.keystore')
             storePassword keystoreProperties['RELEASE_STORE_PASSWORD'] ?: 'android'
             keyAlias keystoreProperties['RELEASE_KEY_ALIAS'] ?: 'androiddebugkey'
             keyPassword keystoreProperties['RELEASE_KEY_PASSWORD'] ?: 'android'
