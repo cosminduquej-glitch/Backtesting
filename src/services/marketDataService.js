@@ -1,21 +1,63 @@
 import { CapacitorHttp, Capacitor } from '@capacitor/core';
 
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const CACHE_PREFIX = 'market_candles_v1:';
+const CACHE_PREFIX = 'market_candles_v2:';
 
-function getRangeConfig(range) {
-  const configs = {
-    "1M": { rangeStr: "1mo", intervalStr: "1d" },
-    "3M": { rangeStr: "3mo", intervalStr: "1d" },
-    "6M": { rangeStr: "6mo", intervalStr: "1d" },
-    "1Y": { rangeStr: "1y", intervalStr: "1d" },
-  };
+const BROWSER_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36';
 
-  return configs[range] || configs["3M"];
+// ── Symbol alias map ─────────────────────────────────────────────────────────
+// Common trading names → Yahoo Finance ticker
+const SYMBOL_ALIASES = {
+  'US100':   'NQ=F',     // Nasdaq 100 futures
+  'NAS100':  'NQ=F',
+  'NASDAQ':  '^IXIC',    // Nasdaq Composite index
+  'NASDAQ100': 'NQ=F',
+  'US30':    'YM=F',     // Dow Jones futures
+  'DOW':     '^DJI',     // Dow Jones index
+  'US500':   'ES=F',     // S&P 500 futures
+  'SP500':   '^GSPC',    // S&P 500 index
+  'GOLD':    'GC=F',     // Gold futures
+  'XAUUSD':  'GC=F',
+  'SILVER':  'SI=F',     // Silver futures
+  'XAGUSD':  'SI=F',
+  'OIL':     'CL=F',     // Crude oil futures
+  'CRUDE':   'CL=F',
+  'EURUSD':  'EURUSD=X',
+  'GBPUSD':  'GBPUSD=X',
+  'USDJPY':  'USDJPY=X',
+  'BTCUSD':  'BTC-USD',
+  'BTC':     'BTC-USD',
+  'ETHUSD':  'ETH-USD',
+  'ETH':     'ETH-USD',
+  'VIX':     '^VIX',
+  'DXY':     'DX-Y.NYB', // Dollar index
+};
+
+function resolveSymbol(input) {
+  const upper = input.trim().toUpperCase();
+  return SYMBOL_ALIASES[upper] || upper;
 }
 
-function getDaysFromRange(rangeStr) {
+// ── Timeframe configs ────────────────────────────────────────────────────────
+// Each timeframe maps to Yahoo interval + range values
+
+export const TIMEFRAMES = [
+  { id: '1m',  label: '1m',  yahooInterval: '1m',  yahooRange: '1d',  finnhubRes: '1'  },
+  { id: '5m',  label: '5m',  yahooInterval: '5m',  yahooRange: '5d',  finnhubRes: '5'  },
+  { id: '30m', label: '30m', yahooInterval: '30m', yahooRange: '1mo', finnhubRes: '30' },
+  { id: '1h',  label: '1H',  yahooInterval: '1h',  yahooRange: '1mo', finnhubRes: '60' },
+  { id: '1d',  label: '1D',  yahooInterval: '1d',  yahooRange: '3mo', finnhubRes: 'D'  },
+  { id: '1wk', label: '1W',  yahooInterval: '1wk', yahooRange: '1y',  finnhubRes: 'W'  },
+];
+
+function getTimeframeConfig(timeframeId) {
+  return TIMEFRAMES.find(t => t.id === timeframeId) || TIMEFRAMES[4]; // default 1D
+}
+
+function getDaysFromYahooRange(rangeStr) {
   if (!rangeStr) return 90;
+  if (rangeStr === '1d') return 1;
+  if (rangeStr === '5d') return 5;
   if (rangeStr.endsWith('mo')) {
     const months = parseInt(rangeStr.replace('mo', ''), 10) || 1;
     return months * 30;
@@ -27,14 +69,14 @@ function getDaysFromRange(rangeStr) {
   return 90;
 }
 
-function getCacheKey(symbol, rangeStr) {
-  return `${CACHE_PREFIX}${symbol.trim().toUpperCase()}:${rangeStr}`;
+function getCacheKey(symbol, timeframeId) {
+  return `${CACHE_PREFIX}${symbol.trim().toUpperCase()}:${timeframeId}`;
 }
 
-export function getCachedCandles(symbol, range = '3M') {
+export function getCachedCandles(symbol, timeframeId = '1d') {
   try {
     if (typeof window === 'undefined' || !window.localStorage) return null;
-    const key = getCacheKey(symbol, range);
+    const key = getCacheKey(symbol, timeframeId);
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
@@ -47,10 +89,10 @@ export function getCachedCandles(symbol, range = '3M') {
   }
 }
 
-function setCachedCandles(symbol, range = '3M', result) {
+function setCachedCandles(symbol, timeframeId, result) {
   try {
     if (typeof window === 'undefined' || !window.localStorage) return;
-    const key = getCacheKey(symbol, range);
+    const key = getCacheKey(symbol, timeframeId);
     const payload = {
       timestamp: Date.now(),
       candles: result.candles,
@@ -63,9 +105,17 @@ function setCachedCandles(symbol, range = '3M', result) {
   }
 }
 
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
+
 async function httpGetJson(url, headers = {}) {
+  const finalHeaders = {
+    'User-Agent': BROWSER_UA,
+    Accept: 'application/json',
+    ...headers,
+  };
+
   if (Capacitor.isNativePlatform()) {
-    const response = await CapacitorHttp.get({ url, headers });
+    const response = await CapacitorHttp.get({ url, headers: finalHeaders });
     if (response.status < 200 || response.status >= 300) {
       const err = new Error(`HTTP ${response.status}`);
       err.status = response.status;
@@ -73,7 +123,7 @@ async function httpGetJson(url, headers = {}) {
     }
     return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
   } else {
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { headers: finalHeaders });
     if (!response.ok) {
       const err = new Error(`HTTP ${response.status}`);
       err.status = response.status;
@@ -84,8 +134,13 @@ async function httpGetJson(url, headers = {}) {
 }
 
 async function httpGetText(url, headers = {}) {
+  const finalHeaders = {
+    'User-Agent': BROWSER_UA,
+    ...headers,
+  };
+
   if (Capacitor.isNativePlatform()) {
-    const response = await CapacitorHttp.get({ url, headers });
+    const response = await CapacitorHttp.get({ url, headers: finalHeaders });
     if (response.status < 200 || response.status >= 300) {
       const err = new Error(`HTTP ${response.status}`);
       err.status = response.status;
@@ -93,7 +148,7 @@ async function httpGetText(url, headers = {}) {
     }
     return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
   } else {
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { headers: finalHeaders });
     if (!response.ok) {
       const err = new Error(`HTTP ${response.status}`);
       err.status = response.status;
@@ -103,17 +158,71 @@ async function httpGetText(url, headers = {}) {
   }
 }
 
-async function fetchFromFinnhub(symbol, rangeConfig) {
+// ── Shared Yahoo parser ───────────────────────────────────────────────────────
+
+function parseYahooChart(payload, symbol, sourceId, sourceLabel) {
+  const result = payload?.chart?.result?.[0];
+  if (!result || !result.timestamp || !result.indicators?.quote?.[0]) {
+    throw new Error(`No candle data from ${sourceLabel}`);
+  }
+
+  const timestamps = result.timestamp;
+  const quote = result.indicators.quote[0];
+  const candles = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (quote.open[i] != null && quote.high[i] != null && quote.low[i] != null && quote.close[i] != null) {
+      candles.push({
+        timestamp: timestamps[i] * 1000,
+        open: Number(quote.open[i]),
+        high: Number(quote.high[i]),
+        low: Number(quote.low[i]),
+        close: Number(quote.close[i]),
+      });
+    }
+  }
+  if (!candles.length) throw new Error(`Empty candle array from ${sourceLabel}`);
+  candles.sort((a, b) => a.timestamp - b.timestamp);
+
+  return { symbol, source: sourceId, sourceLabel, candles, nextRecommendedRefreshMs: 60_000 };
+}
+
+// ── Provider: Yahoo Finance query1 ───────────────────────────────────────────
+
+async function fetchYahooQ1(symbol, tf) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${tf.yahooInterval}&range=${tf.yahooRange}`;
+  const payload = await httpGetJson(url);
+  return parseYahooChart(payload, symbol, 'yahoo-q1', 'Yahoo (q1)');
+}
+
+// ── Provider: Yahoo Finance query2 ───────────────────────────────────────────
+
+async function fetchYahooQ2(symbol, tf) {
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${tf.yahooInterval}&range=${tf.yahooRange}`;
+  const payload = await httpGetJson(url);
+  return parseYahooChart(payload, symbol, 'yahoo-q2', 'Yahoo (q2)');
+}
+
+// ── Provider: Yahoo via allorigins proxy (bypasses IP rate limits) ────────────
+
+async function fetchYahooProxied(symbol, tf) {
+  const target = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${tf.yahooInterval}&range=${tf.yahooRange}`;
+  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
+  const payload = await httpGetJson(proxyUrl);
+  return parseYahooChart(payload, symbol, 'yahoo-proxy', 'Yahoo (proxy)');
+}
+
+// ── Provider: Finnhub ─────────────────────────────────────────────────────────
+
+async function fetchFromFinnhub(symbol, tf) {
   const token = import.meta.env.VITE_FINNHUB_API_KEY;
   if (!token) throw new Error('Missing FINNHUB API key');
 
-  const resolution = rangeConfig.intervalStr === '1d' ? 'D' : rangeConfig.intervalStr;
   const to = Math.floor(Date.now() / 1000);
-  const days = getDaysFromRange(rangeConfig.rangeStr);
+  const days = getDaysFromYahooRange(tf.yahooRange);
   const from = to - Math.max(1, days) * 24 * 60 * 60;
 
-  const endpoint = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&from=${from}&to=${to}&token=${encodeURIComponent(token)}`;
-  const payload = await httpGetJson(endpoint, { Accept: 'application/json' });
+  const endpoint = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=${tf.finnhubRes}&from=${from}&to=${to}&token=${encodeURIComponent(token)}`;
+  const payload = await httpGetJson(endpoint);
 
   if (!payload || payload.s !== 'ok' || !Array.isArray(payload.t) || payload.t.length === 0) {
     throw new Error('No finnhub candle data');
@@ -134,31 +243,32 @@ async function fetchFromFinnhub(symbol, rangeConfig) {
   if (!candles.length) throw new Error('No valid finnhub candles');
   candles.sort((a, b) => a.timestamp - b.timestamp);
 
-  return {
-    symbol,
-    source: 'finnhub',
-    sourceLabel: 'Finnhub',
-    candles,
-    nextRecommendedRefreshMs: 60 * 1000,
-  };
+  return { symbol, source: 'finnhub', sourceLabel: 'Finnhub', candles, nextRecommendedRefreshMs: 60_000 };
 }
 
-async function fetchFromAlphaVantage(symbol, rangeConfig) {
+// ── Provider: Alpha Vantage ───────────────────────────────────────────────────
+
+async function fetchFromAlphaVantage(symbol, tf) {
   const key = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
   if (!key) throw new Error('Missing Alpha Vantage API key');
 
-  const endpoint = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol=${encodeURIComponent(symbol)}&outputsize=full&apikey=${encodeURIComponent(key)}`;
-  const payload = await httpGetJson(endpoint, { Accept: 'application/json' });
+  // Alpha Vantage only supports daily for free tier
+  if (tf.yahooInterval !== '1d' && tf.yahooInterval !== '1wk') {
+    throw new Error('Alpha Vantage free tier only supports daily');
+  }
+
+  const endpoint = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(symbol)}&outputsize=compact&apikey=${encodeURIComponent(key)}`;
+  const payload = await httpGetJson(endpoint);
 
   const series = payload && (payload['Time Series (Daily)'] || payload['Time Series Daily']);
   if (!series || typeof series !== 'object') {
     throw new Error('No Alpha Vantage time series returned');
   }
 
-  const days = getDaysFromRange(rangeConfig.rangeStr);
+  const days = getDaysFromYahooRange(tf.yahooRange);
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
-  const dates = Object.keys(series).sort((a, b) => new Date(a) - new Date(b)); // ascending
+  const dates = Object.keys(series).sort((a, b) => new Date(a) - new Date(b));
   const candles = [];
   for (const date of dates) {
     const row = series[date];
@@ -175,23 +285,23 @@ async function fetchFromAlphaVantage(symbol, rangeConfig) {
 
   if (!candles.length) throw new Error('No valid Alpha Vantage candles');
 
-  return {
-    symbol,
-    source: 'alphavantage',
-    sourceLabel: 'Alpha Vantage',
-    candles,
-    nextRecommendedRefreshMs: 60 * 1000,
-  };
+  return { symbol, source: 'alphavantage', sourceLabel: 'Alpha Vantage', candles, nextRecommendedRefreshMs: 60_000 };
 }
 
-async function fetchFromStooq(symbol, rangeConfig) {
+// ── Provider: Stooq ───────────────────────────────────────────────────────────
+
+async function fetchFromStooq(symbol, tf) {
+  // Stooq only supports daily
+  if (tf.yahooInterval !== '1d' && tf.yahooInterval !== '1wk') {
+    throw new Error('Stooq only supports daily data');
+  }
+
   let s = symbol.toLowerCase();
   if (!s.includes('.')) s = `${s}.us`;
   const endpoint = `https://stooq.com/q/d/l/?s=${encodeURIComponent(s)}&i=d`;
   const text = await httpGetText(endpoint, { Accept: 'text/csv' });
   if (!text || !text.trim()) throw new Error('No data from Stooq');
 
-  // Stooq now may require an API key and returns an instruction page instead of CSV
   if (/get your apikey/i.test(text) || /enter the captcha/i.test(text) || text.trim().toLowerCase().startsWith('<!doctype html')) {
     throw new Error('Stooq requires API key (no-key endpoints removed)');
   }
@@ -206,7 +316,7 @@ async function fetchFromStooq(symbol, rangeConfig) {
   const lowIdx = header.indexOf('low');
   const closeIdx = header.indexOf('close');
 
-  const days = getDaysFromRange(rangeConfig.rangeStr);
+  const days = getDaysFromYahooRange(tf.yahooRange);
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   const candles = [];
 
@@ -227,69 +337,41 @@ async function fetchFromStooq(symbol, rangeConfig) {
   if (!candles.length) throw new Error('No valid Stooq candles');
   candles.sort((a, b) => a.timestamp - b.timestamp);
 
-  return {
-    symbol,
-    source: 'stooq',
-    sourceLabel: 'Stooq',
-    candles,
-    nextRecommendedRefreshMs: 60 * 1000,
-  };
+  return { symbol, source: 'stooq', sourceLabel: 'Stooq', candles, nextRecommendedRefreshMs: 60_000 };
 }
 
-async function fetchFromYahoo(symbol, rangeConfig) {
-  const endpoint = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${rangeConfig.intervalStr}&range=${rangeConfig.rangeStr}`;
-  const payload = await httpGetJson(endpoint, { Accept: 'application/json' });
-  const result = payload?.chart?.result?.[0];
-  if (!result || !result.timestamp || !result.indicators?.quote?.[0]) {
-    throw new Error(`No candle data returned for ${symbol}`);
-  }
+// ── Main fetch with failover ─────────────────────────────────────────────────
 
-  const timestamps = result.timestamp;
-  const quote = result.indicators.quote[0];
-  const candles = [];
-  for (let i = 0; i < timestamps.length; i++) {
-    if (quote.open[i] !== null && quote.high[i] !== null && quote.low[i] !== null && quote.close[i] !== null) {
-      candles.push({
-        timestamp: timestamps[i] * 1000,
-        open: Number(quote.open[i]),
-        high: Number(quote.high[i]),
-        low: Number(quote.low[i]),
-        close: Number(quote.close[i]),
-      });
-    }
-  }
-  if (!candles.length) throw new Error('No valid candles inside Yahoo response');
-  candles.sort((a, b) => a.timestamp - b.timestamp);
+export async function fetchCandlesWithFailover(symbol, timeframeId = '1d') {
+  const inputSymbol = symbol.trim().toUpperCase();
+  const resolvedSymbol = resolveSymbol(inputSymbol);
+  const tf = getTimeframeConfig(timeframeId);
 
-  return {
-    symbol,
-    source: 'yahoo',
-    sourceLabel: 'Yahoo Finance (Free)',
-    candles,
-    nextRecommendedRefreshMs: 60 * 1000,
-  };
-}
+  if (!inputSymbol) throw new Error('Please enter a symbol');
 
-export async function fetchCandlesWithFailover(symbol, range = '3M') {
-  const cleanedSymbol = symbol.trim().toUpperCase();
-  const rangeConfig = getRangeConfig(range);
+  // Provider priority: free no-key Yahoo first, then paid APIs, then Stooq
+  const providers = [
+    { name: 'yahoo-q1',    fn: fetchYahooQ1 },
+    { name: 'yahoo-q2',    fn: fetchYahooQ2 },
+    { name: 'yahoo-proxy', fn: fetchYahooProxied },
+  ];
 
-  if (!cleanedSymbol) throw new Error('Please enter a symbol');
-
-  // Provider priority
-  const providers = [];
+  // Keyed APIs in the middle (they may be rate-limited / expired)
   if (import.meta.env.VITE_FINNHUB_API_KEY) providers.push({ name: 'finnhub', fn: fetchFromFinnhub });
   if (import.meta.env.VITE_ALPHA_VANTAGE_API_KEY) providers.push({ name: 'alphavantage', fn: fetchFromAlphaVantage });
+
   providers.push({ name: 'stooq', fn: fetchFromStooq });
-  providers.push({ name: 'yahoo', fn: fetchFromYahoo });
 
   const attempts = [];
 
   for (const provider of providers) {
     try {
-      const result = await provider.fn(cleanedSymbol, rangeConfig);
+      const result = await provider.fn(resolvedSymbol, tf);
       if (result && Array.isArray(result.candles) && result.candles.length) {
-        try { setCachedCandles(cleanedSymbol, rangeConfig.rangeStr, result); } catch (e) {}
+        // Store using the user's original symbol for cache lookup
+        result.symbol = inputSymbol;
+        result.resolvedSymbol = resolvedSymbol;
+        try { setCachedCandles(inputSymbol, timeframeId, result); } catch (e) {}
         return result;
       }
     } catch (err) {
@@ -297,7 +379,6 @@ export async function fetchCandlesWithFailover(symbol, range = '3M') {
       attempts.push({ provider: provider.name, message, status: err && err.status });
       // eslint-disable-next-line no-console
       console.warn('Market data provider failed:', provider.name, message);
-      // continue to next provider
     }
   }
 

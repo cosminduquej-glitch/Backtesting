@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from "react";
 
 import CandlestickChart from "./components/CandlestickChart";
-import { fetchCandlesWithFailover } from "./services/marketDataService";
+import { fetchCandlesWithFailover, getCachedCandles, TIMEFRAMES } from "./services/marketDataService";
 
 function App() {
   const [symbolInput, setSymbolInput] = useState("SPY");
   const [activeSymbol, setActiveSymbol] = useState("SPY");
+  const [activeTimeframe, setActiveTimeframe] = useState("1d");
   const [refreshSeed] = useState(0);
   const [marketState, setMarketState] = useState({
     candles: [],
@@ -18,8 +19,14 @@ function App() {
 
   const addLog = (msg, type = "info") => {
     const time = new Date().toLocaleTimeString();
-    setDebugLogs(prev => [...prev, { time, msg, type }]);
+    setDebugLogs(prev => [...prev.slice(-50), { time, msg, type }]); // keep last 50 logs
   };
+
+  useEffect(() => {
+    addLog("App mounted. Checking env vars...", "info");
+    addLog(`FINNHUB key: ${import.meta.env.VITE_FINNHUB_API_KEY ? "present (" + import.meta.env.VITE_FINNHUB_API_KEY.slice(0,6) + "...)" : "MISSING"}`, import.meta.env.VITE_FINNHUB_API_KEY ? "success" : "error");
+    addLog(`ALPHA_VANTAGE key: ${import.meta.env.VITE_ALPHA_VANTAGE_API_KEY ? "present (" + import.meta.env.VITE_ALPHA_VANTAGE_API_KEY.slice(0,4) + "...)" : "MISSING"}`, import.meta.env.VITE_ALPHA_VANTAGE_API_KEY ? "success" : "error");
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -28,10 +35,10 @@ function App() {
     async function loadCandles() {
       // Try to show cached data quickly (stale-while-revalidate)
       try {
-        const cached = getCachedCandles(activeSymbol, '3M');
+        const cached = getCachedCandles(activeSymbol, activeTimeframe);
         if (cached && cached.candles && cached.candles.length) {
           setMarketState({ candles: cached.candles, isLoading: false, error: null });
-          addLog(`Loaded cached ${cached.candles.length} candles for ${activeSymbol} (age ${Math.round(cached.ageMs/1000)}s)`, 'info');
+          addLog(`Loaded cached ${cached.candles.length} candles for ${activeSymbol} @${activeTimeframe} (age ${Math.round(cached.ageMs/1000)}s)`, 'info');
         } else {
           setMarketState((previous) => ({
             ...previous,
@@ -40,6 +47,7 @@ function App() {
           }));
         }
       } catch (e) {
+        addLog(`Cache read error: ${e.message}`, "error");
         setMarketState((previous) => ({
           ...previous,
           isLoading: previous.candles.length === 0,
@@ -47,11 +55,11 @@ function App() {
         }));
       }
 
-      addLog(`Requesting data for ${activeSymbol}...`, "info");
+      addLog(`Requesting ${activeSymbol} @${activeTimeframe}...`, "info");
 
       // Attempt network fetch and update cache on success
       try {
-        const response = await fetchCandlesWithFailover(activeSymbol, "3M");
+        const response = await fetchCandlesWithFailover(activeSymbol, activeTimeframe);
 
         if (isCancelled) return;
 
@@ -61,16 +69,18 @@ function App() {
           error: null,
         });
 
-        addLog(`Successfully loaded ${response.candles.length} candles for ${activeSymbol} (source: ${response.source})`, "success");
+        const resolvedNote = response.resolvedSymbol && response.resolvedSymbol !== activeSymbol
+          ? ` (resolved: ${response.resolvedSymbol})`
+          : '';
+        addLog(`✅ ${response.candles.length} candles for ${activeSymbol}${resolvedNote} @${activeTimeframe} via ${response.sourceLabel}`, "success");
 
         timerId = window.setTimeout(loadCandles, response.nextRecommendedRefreshMs || 60000);
       } catch (error) {
         if (isCancelled) return;
 
-        const cached = getCachedCandles(activeSymbol, '3M');
+        const cached = getCachedCandles(activeSymbol, activeTimeframe);
         if (cached && cached.candles && cached.candles.length) {
-          // Keep showing cached data, just log the refresh error
-          addLog(`Error refreshing ${activeSymbol}: ${error.message}`, 'error');
+          addLog(`⚠ Refresh failed but using cache: ${error.message}`, 'error');
         } else {
           setMarketState((previous) => ({
             ...previous,
@@ -78,7 +88,7 @@ function App() {
             error: error.message,
           }));
 
-          addLog(`Error fetching ${activeSymbol}: ${error.message}`, "error");
+          addLog(`❌ Error fetching ${activeSymbol}: ${error.message}`, "error");
         }
 
         const waitMs = (error && error.nextRecommendedRefreshMs) ? error.nextRecommendedRefreshMs : 60000;
@@ -94,7 +104,7 @@ function App() {
         window.clearTimeout(timerId);
       }
     };
-  }, [activeSymbol, refreshSeed]);
+  }, [activeSymbol, activeTimeframe, refreshSeed]);
 
   const handleSymbolSubmit = (event) => {
     event.preventDefault();
@@ -113,12 +123,25 @@ function App() {
             className="symbol-input"
             value={symbolInput}
             onChange={(event) => setSymbolInput(event.target.value.toUpperCase())}
-            placeholder="Search chart (e.g. SPY, AAPL)"
+            placeholder="SPY, AAPL, US100..."
             aria-label="Symbol search"
           />
         </form>
+
+        <div className="timeframe-bar">
+          {TIMEFRAMES.map(tf => (
+            <button
+              key={tf.id}
+              className={`tf-btn${activeTimeframe === tf.id ? ' tf-active' : ''}`}
+              onClick={() => setActiveTimeframe(tf.id)}
+            >
+              {tf.label}
+            </button>
+          ))}
+        </div>
+
         <button className="debug-toggle-btn" onClick={() => setDebugOpen(!debugOpen)}>
-          {debugOpen ? "Hide Debug" : "Show Debug"}
+          {debugOpen ? "×" : "⚙"}
         </button>
       </header>
 
@@ -130,10 +153,11 @@ function App() {
       {debugOpen && (
         <div className="debug-window">
           <div className="debug-header">
-            <h3>Debug Logs</h3>
+            <h3>Debug Console</h3>
             <button onClick={() => setDebugOpen(false)}>×</button>
           </div>
           <div className="debug-content">
+            {debugLogs.length === 0 && <div className="log-line log-info">Waiting for logs...</div>}
             {debugLogs.map((log, i) => (
               <div key={i} className={`log-line log-${log.type}`}>
                 <span className="log-time">[{log.time}]</span> {log.msg}
