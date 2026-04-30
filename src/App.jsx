@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 
 import CandlestickChart from "./components/CandlestickChart";
 import { fetchCandlesWithFailover, getCachedCandles, TIMEFRAMES } from "./services/marketDataService";
@@ -19,7 +19,7 @@ const ACCESSIBLE_STOCKS = [
 ];
 
 function App() {
-  const [activeSymbol, setActiveSymbol] = useState("SPY");
+  const [activeSymbol, setActiveSymbol] = useState("SP500");
   const [activeTimeframe, setActiveTimeframe] = useState("1d");
   const [jumpToLatestSignal, setJumpToLatestSignal] = useState(0);
   const [jumpBtnPos, setJumpBtnPos] = useState(null);
@@ -33,6 +33,11 @@ function App() {
 
   const [debugLogs, setDebugLogs] = useState([]);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [backtestEnabled, setBacktestEnabled] = useState(false);
+  const [backtestFrom, setBacktestFrom] = useState("");
+  const [backtestTo, setBacktestTo] = useState("");
+  const [backtestStep, setBacktestStep] = useState(0);
   const jumpBtnRef = useRef(null);
   const chartLayoutRef = useRef(null);
   const dragStateRef = useRef({
@@ -139,6 +144,19 @@ function App() {
   useEffect(() => {
     setJumpToLatestSignal((prev) => prev + 1);
   }, [activeSymbol, activeTimeframe]);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [activeSymbol, activeTimeframe]);
+
+  useEffect(() => {
+    if (!marketState.candles || marketState.candles.length === 0) return;
+    const sorted = [...marketState.candles].sort((a, b) => a.timestamp - b.timestamp);
+    const minDate = new Date(sorted[0].timestamp).toISOString().slice(0, 10);
+    const maxDate = new Date(sorted[sorted.length - 1].timestamp).toISOString().slice(0, 10);
+    setBacktestFrom((prev) => prev || minDate);
+    setBacktestTo((prev) => prev || maxDate);
+  }, [marketState.candles]);
 
   useEffect(() => {
     return () => {
@@ -254,6 +272,63 @@ function App() {
     window.addEventListener("pointercancel", handlePointerUp);
   };
 
+  const backtestContext = useMemo(() => {
+    if (!backtestEnabled || !marketState.candles || marketState.candles.length === 0) {
+      return { baseCandles: [], forwardCandles: [], maxStep: 0 };
+    }
+
+    const sorted = [...marketState.candles].sort((a, b) => a.timestamp - b.timestamp);
+    const fromMs = backtestFrom ? new Date(`${backtestFrom}T00:00:00Z`).getTime() : Number.NEGATIVE_INFINITY;
+    const toMs = backtestTo ? new Date(`${backtestTo}T23:59:59Z`).getTime() : Number.POSITIVE_INFINITY;
+
+    const firstIdx = sorted.findIndex((c) => c.timestamp >= fromMs && c.timestamp <= toMs);
+    if (firstIdx === -1) return { baseCandles: [], forwardCandles: [], maxStep: 0 };
+
+    let lastIdx = -1;
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      if (sorted[i].timestamp <= toMs) {
+        lastIdx = i;
+        break;
+      }
+    }
+    if (lastIdx < firstIdx) return { baseCandles: [], forwardCandles: [], maxStep: 0 };
+
+    // Load extra context before start date so chart does not look empty at start.
+    const preloadStart = Math.max(0, firstIdx - 50);
+    const baseCandles = sorted.slice(preloadStart, firstIdx + 1);
+    const forwardCandles = sorted.slice(firstIdx + 1, lastIdx + 1);
+
+    return {
+      baseCandles,
+      forwardCandles,
+      maxStep: forwardCandles.length,
+    };
+  }, [backtestEnabled, backtestFrom, backtestTo, marketState.candles]);
+
+  const backtestMaxStep = backtestContext.maxStep;
+
+  useEffect(() => {
+    if (!backtestEnabled) return;
+    setBacktestStep(0);
+  }, [backtestEnabled, backtestFrom, backtestTo, activeSymbol, activeTimeframe]);
+
+  const displayedCandles = useMemo(() => {
+    if (!backtestEnabled) return marketState.candles;
+    if (!backtestContext.baseCandles.length) return [];
+    const step = Math.min(backtestStep, backtestMaxStep);
+    return [
+      ...backtestContext.baseCandles,
+      ...backtestContext.forwardCandles.slice(0, step),
+    ];
+  }, [backtestEnabled, marketState.candles, backtestContext, backtestStep, backtestMaxStep]);
+
+  const handleNextBacktestCandle = () => {
+    setBacktestStep((prev) => {
+      const next = Math.min(prev + 1, backtestMaxStep);
+      return next;
+    });
+  };
+
   return (
     <main className="trading-view-shell">
       <header className="trading-nav">
@@ -275,6 +350,51 @@ function App() {
       </header>
 
       <section className="fullscreen-chart-layout" ref={chartLayoutRef}>
+        <div className="backtest-menu-wrap">
+          <button
+            className="backtest-menu-btn"
+            onClick={() => setMenuOpen((prev) => !prev)}
+            aria-label="Backtest menu"
+          >
+            ...
+          </button>
+          {menuOpen && (
+            <div className="backtest-menu-panel">
+              <button
+                className={`backtest-option${backtestEnabled ? " backtest-option-active" : ""}`}
+                onClick={() => {
+                  setBacktestEnabled((prev) => !prev);
+                  setMenuOpen(false);
+                  setJumpToLatestSignal((prev) => prev + 1);
+                }}
+              >
+                Backtesting
+              </button>
+            </div>
+          )}
+        </div>
+
+        {backtestEnabled && (
+          <div className="backtest-range-panel">
+            <label>
+              Von
+              <input
+                type="date"
+                value={backtestFrom}
+                onChange={(e) => setBacktestFrom(e.target.value)}
+              />
+            </label>
+            <label>
+              Bis
+              <input
+                type="date"
+                value={backtestTo}
+                onChange={(e) => setBacktestTo(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+
         <div className="floating-symbol-select">
           <div className="symbol-select-wrap">
             <select
@@ -293,7 +413,7 @@ function App() {
         </div>
         {marketState.error && <div className="overlay-error">{marketState.error}</div>}
         <CandlestickChart
-          candles={marketState.candles}
+          candles={displayedCandles}
           activeSymbol={activeSymbol}
           activeTimeframe={activeTimeframe}
           jumpToLatestSignal={jumpToLatestSignal}
@@ -308,6 +428,17 @@ function App() {
         >
           Latest
         </button>
+
+        {backtestEnabled && backtestContext.baseCandles.length > 0 && (
+          <button
+            className="backtest-next-btn"
+            onClick={handleNextBacktestCandle}
+            disabled={backtestStep >= backtestMaxStep}
+            aria-label="Nächste Kerze"
+          >
+            →
+          </button>
+        )}
       </section>
 
       {debugOpen && (

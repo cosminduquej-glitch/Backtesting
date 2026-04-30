@@ -7,6 +7,7 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
   const seriesRef = useRef(null);
   const pendingJumpRef = useRef([]);
   const latestDataRef = useRef([]);
+  const consumedJumpSignalRef = useRef(-1);
 
   function clearPendingJumps() {
     for (const handle of pendingJumpRef.current) {
@@ -47,7 +48,7 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
     timeScale.setVisibleRange({ from: fromTime, to: toTime });
     timeScale.scrollToRealTime();
 
-    // Keep the fitted height, then unlock immediate vertical movement.
+    // Fit once, then keep manual vertical control unlocked.
     const unlockVertical = () => {
       rightScale.applyOptions({
         autoScale: false,
@@ -99,7 +100,7 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
         secondsVisible: false,
         rightOffset: 8,
         barSpacing: 8,
-        minBarSpacing: 4,
+        minBarSpacing: 0.05,
       },
       rightPriceScale: {
         autoScale: true,
@@ -157,16 +158,34 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
       try {
         seriesRef.current.setData(formattedData);
         latestDataRef.current = formattedData;
-        scheduleJumpToLatest();
+        // Only force-jump when explicitly requested (symbol/timeframe change or Latest button).
+        if (jumpToLatestSignal !== consumedJumpSignalRef.current) {
+          scheduleJumpToLatest();
+          consumedJumpSignalRef.current = jumpToLatestSignal;
+        } else {
+          // Keep user-controlled vertical scale stable when new candles are revealed.
+          const rightScale = chartRef.current?.priceScale("right");
+          rightScale?.applyOptions({
+            autoScale: false,
+            scaleMargins: { top: 0.12, bottom: 0.12 },
+          });
+          seriesRef.current?.priceScale?.().applyOptions({
+            autoScale: false,
+            scaleMargins: { top: 0.12, bottom: 0.12 },
+          });
+        }
       } catch (err) {
         console.error("Chart data error:", err);
       }
     }
-  }, [candles, activeSymbol, activeTimeframe]);
+  }, [candles, activeSymbol, activeTimeframe, jumpToLatestSignal]);
 
   useEffect(() => {
     if (latestDataRef.current && latestDataRef.current.length > 0) {
-      scheduleJumpToLatest();
+      if (jumpToLatestSignal !== consumedJumpSignalRef.current) {
+        scheduleJumpToLatest();
+        consumedJumpSignalRef.current = jumpToLatestSignal;
+      }
     }
   }, [jumpToLatestSignal]);
 

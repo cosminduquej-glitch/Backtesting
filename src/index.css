@@ -140,6 +140,82 @@ body,
   z-index: 130;
 }
 
+.backtest-menu-wrap {
+  position: absolute;
+  left: 10px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 131;
+}
+
+.backtest-menu-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #2a2e39;
+  border-radius: 8px;
+  background: rgba(30, 34, 45, 0.92);
+  color: #d1d4dc;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.backtest-menu-panel {
+  margin-bottom: 6px;
+  min-width: 132px;
+  border: 1px solid #2a2e39;
+  border-radius: 8px;
+  background: rgba(19, 23, 34, 0.98);
+  padding: 6px;
+  position: absolute;
+  bottom: 40px;
+  left: 0;
+}
+
+.backtest-option {
+  width: 100%;
+  border: 1px solid #2a2e39;
+  border-radius: 6px;
+  background: transparent;
+  color: #d1d4dc;
+  padding: 7px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.backtest-option-active {
+  background: rgba(41, 98, 255, 0.18);
+  border-color: rgba(41, 98, 255, 0.45);
+}
+
+.backtest-range-panel {
+  position: absolute;
+  top: 50px;
+  left: 8px;
+  z-index: 132;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #2a2e39;
+  border-radius: 10px;
+  background: rgba(19, 23, 34, 0.96);
+}
+
+.backtest-range-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #aeb3be;
+}
+
+.backtest-range-panel input {
+  border: 1px solid #2a2e39;
+  border-radius: 6px;
+  background: #131722;
+  color: #d1d4dc;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
 .overlay-error {
   position: absolute;
   top: 50%;
@@ -192,6 +268,28 @@ body,
   transform: scale(1);
   box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.3);
   background: rgba(41, 98, 255, 0.18);
+}
+
+.backtest-next-btn {
+  position: absolute;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid #2a2e39;
+  background: rgba(30, 34, 45, 0.95);
+  color: #d1d4dc;
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 140;
+}
+
+.backtest-next-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* Inside the candlestick chart component */

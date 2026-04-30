@@ -47,10 +47,10 @@ export const TIMEFRAMES = [
   { id: '5m',  label: '5m',  yahooInterval: '5m',  yahooRange: '5d',  finnhubRes: '5'  },
   { id: '15m', label: '15m', yahooInterval: '15m', yahooRange: '5d',  finnhubRes: '15' },
   { id: '30m', label: '30m', yahooInterval: '30m', yahooRange: '1mo', finnhubRes: '30' },
-  { id: '1h',  label: '1H',  yahooInterval: '1h',  yahooRange: '1mo', finnhubRes: '60' },
-  { id: '4h',  label: '4H',  yahooInterval: '1h',  yahooRange: '3mo', finnhubRes: '240' },
-  { id: '1d',  label: '1D',  yahooInterval: '1d',  yahooRange: '3mo', finnhubRes: 'D'  },
-  { id: '1wk', label: '1W',  yahooInterval: '1wk', yahooRange: '1y',  finnhubRes: 'W'  },
+  { id: '1h',  label: '1H',  yahooInterval: '1h',  yahooRange: '1y',  finnhubRes: '60' },
+  { id: '4h',  label: '4H',  yahooInterval: '1h',  yahooRange: '2y',  finnhubRes: '240' },
+  { id: '1d',  label: '1D',  yahooInterval: '1d',  yahooRange: 'max', finnhubRes: 'D'  },
+  { id: '1wk', label: '1W',  yahooInterval: '1wk', yahooRange: 'max', finnhubRes: 'W'  },
 ];
 
 function getTimeframeConfig(timeframeId) {
@@ -69,6 +69,7 @@ function getDaysFromYahooRange(rangeStr) {
     const years = parseInt(rangeStr.replace('y', ''), 10) || 1;
     return years * 365;
   }
+  if (rangeStr === 'max') return 365 * 200;
   return 90;
 }
 
