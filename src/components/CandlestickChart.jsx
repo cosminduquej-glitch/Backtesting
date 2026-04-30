@@ -1,10 +1,83 @@
 import { useEffect, useRef } from "react";
 import { createChart, CandlestickSeries } from "lightweight-charts";
 
-function CandlestickChart({ candles }) {
+function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatestSignal }) {
   const chartContainerRef = useRef();
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const pendingJumpRef = useRef([]);
+  const latestDataRef = useRef([]);
+
+  function clearPendingJumps() {
+    for (const handle of pendingJumpRef.current) {
+      if (handle.type === "raf") window.cancelAnimationFrame(handle.id);
+      if (handle.type === "timeout") window.clearTimeout(handle.id);
+    }
+    pendingJumpRef.current = [];
+  }
+
+  function jumpToLatestCandles() {
+    const chart = chartRef.current;
+    const data = latestDataRef.current;
+    const series = seriesRef.current;
+    if (!chart || !data || data.length === 0) return;
+
+    const barsToShow = Math.min(data.length, 120);
+    const firstVisibleLogical = Math.max(0, data.length - barsToShow);
+    const lastLogical = Math.max(0, data.length - 1);
+    const fromTime = data[firstVisibleLogical].time;
+    const toTime = data[lastLogical].time;
+
+    const timeScale = chart.timeScale();
+    const rightScale = chart.priceScale("right");
+
+    // Reset vertical price zoom so latest candles are at correct visible height.
+    rightScale.applyOptions({
+      autoScale: true,
+      scaleMargins: { top: 0.12, bottom: 0.12 },
+    });
+    if (series?.priceScale) {
+      series.priceScale().applyOptions({
+        autoScale: true,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      });
+    }
+
+    timeScale.setVisibleLogicalRange({ from: firstVisibleLogical, to: lastLogical + 1 });
+    timeScale.setVisibleRange({ from: fromTime, to: toTime });
+    timeScale.scrollToRealTime();
+
+    // Keep the fitted height, then unlock immediate vertical movement.
+    const unlockVertical = () => {
+      rightScale.applyOptions({
+        autoScale: false,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      });
+      if (series?.priceScale) {
+        series.priceScale().applyOptions({
+          autoScale: false,
+          scaleMargins: { top: 0.12, bottom: 0.12 },
+        });
+      }
+    };
+    window.requestAnimationFrame(() => window.requestAnimationFrame(unlockVertical));
+  }
+
+  function scheduleJumpToLatest() {
+    clearPendingJumps();
+    jumpToLatestCandles();
+
+    const raf1 = window.requestAnimationFrame(() => jumpToLatestCandles());
+    const raf2 = window.requestAnimationFrame(() => {
+      const nested = window.requestAnimationFrame(() => jumpToLatestCandles());
+      pendingJumpRef.current.push({ type: "raf", id: nested });
+    });
+    const t1 = window.setTimeout(() => jumpToLatestCandles(), 120);
+
+    pendingJumpRef.current.push({ type: "raf", id: raf1 });
+    pendingJumpRef.current.push({ type: "raf", id: raf2 });
+    pendingJumpRef.current.push({ type: "timeout", id: t1 });
+  }
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -24,6 +97,13 @@ function CandlestickChart({ candles }) {
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 8,
+        barSpacing: 8,
+        minBarSpacing: 4,
+      },
+      rightPriceScale: {
+        autoScale: true,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
       },
       crosshair: {
         mode: 1, 
@@ -49,11 +129,14 @@ function CandlestickChart({ candles }) {
         width: newRect.width, 
         height: newRect.height 
       });
+      // Keep latest candles visible after resize/orientation/layout changes.
+      scheduleJumpToLatest();
     });
 
     resizeObserver.observe(chartContainerRef.current);
 
     return () => {
+      clearPendingJumps();
       resizeObserver.disconnect();
       chartRef.current.remove();
     };
@@ -73,15 +156,19 @@ function CandlestickChart({ candles }) {
 
       try {
         seriesRef.current.setData(formattedData);
-        // Auto-fit: zoom so all candles are visible on screen
-        if (chartRef.current) {
-          chartRef.current.timeScale().fitContent();
-        }
+        latestDataRef.current = formattedData;
+        scheduleJumpToLatest();
       } catch (err) {
         console.error("Chart data error:", err);
       }
     }
-  }, [candles]);
+  }, [candles, activeSymbol, activeTimeframe]);
+
+  useEffect(() => {
+    if (latestDataRef.current && latestDataRef.current.length > 0) {
+      scheduleJumpToLatest();
+    }
+  }, [jumpToLatestSignal]);
 
   return (
     <div className="chart-shell">

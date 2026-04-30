@@ -47,13 +47,13 @@ body,
   flex-shrink: 0;
 }
 
-.symbol-search-form {
+.symbol-select-wrap {
   display: flex;
   flex-shrink: 0;
 }
 
-.symbol-input {
-  width: 110px;
+.symbol-select {
+  width: 190px;
   padding: 7px 10px;
   border-radius: 4px;
   border: 1px solid #2a2e39;
@@ -65,18 +65,12 @@ body,
   text-transform: uppercase;
   outline: none;
   transition: border-color 0.2s;
+  appearance: none;
 }
 
-.symbol-input:focus {
+.symbol-select:focus {
   border-color: #2962ff; /* Tradingview blue */
   background: #0d1117;
-}
-
-.symbol-input::placeholder {
-  color: #434651;
-  text-transform: none;
-  font-weight: normal;
-  font-size: 11px;
 }
 
 /* ── Timeframe bar ────────────────────────────────────────────────────────── */
@@ -139,6 +133,13 @@ body,
   min-height: 0; /* allow flex shrink */
 }
 
+.floating-symbol-select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 130;
+}
+
 .overlay-error {
   position: absolute;
   top: 50%;
@@ -154,6 +155,43 @@ body,
   max-width: 90vw;
   font-size: 12px;
   word-break: break-word;
+}
+
+.jump-latest-btn {
+  position: absolute;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 140;
+  border: 1px solid #2a2e39;
+  background: rgba(30, 34, 45, 0.92);
+  color: #d1d4dc;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  transform: scale(1);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+
+.jump-latest-btn:active {
+  transform: scale(0.98);
+}
+
+.jump-latest-btn-arming {
+  transform: scale(0.9);
+}
+
+.jump-latest-btn-dragging {
+  transform: scale(1);
+  box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.3);
+  background: rgba(41, 98, 255, 0.18);
 }
 
 /* Inside the candlestick chart component */

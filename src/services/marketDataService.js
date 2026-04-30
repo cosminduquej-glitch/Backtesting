@@ -15,6 +15,7 @@ const SYMBOL_ALIASES = {
   'US30':    'YM=F',     // Dow Jones futures
   'DOW':     '^DJI',     // Dow Jones index
   'US500':   'ES=F',     // S&P 500 futures
+  'SP500F':  'ES=F',     // S&P 500 futures
   'SP500':   '^GSPC',    // S&P 500 index
   'GOLD':    'GC=F',     // Gold futures
   'XAUUSD':  'GC=F',
@@ -44,8 +45,10 @@ function resolveSymbol(input) {
 export const TIMEFRAMES = [
   { id: '1m',  label: '1m',  yahooInterval: '1m',  yahooRange: '1d',  finnhubRes: '1'  },
   { id: '5m',  label: '5m',  yahooInterval: '5m',  yahooRange: '5d',  finnhubRes: '5'  },
+  { id: '15m', label: '15m', yahooInterval: '15m', yahooRange: '5d',  finnhubRes: '15' },
   { id: '30m', label: '30m', yahooInterval: '30m', yahooRange: '1mo', finnhubRes: '30' },
   { id: '1h',  label: '1H',  yahooInterval: '1h',  yahooRange: '1mo', finnhubRes: '60' },
+  { id: '4h',  label: '4H',  yahooInterval: '1h',  yahooRange: '3mo', finnhubRes: '240' },
   { id: '1d',  label: '1D',  yahooInterval: '1d',  yahooRange: '3mo', finnhubRes: 'D'  },
   { id: '1wk', label: '1W',  yahooInterval: '1wk', yahooRange: '1y',  finnhubRes: 'W'  },
 ];
