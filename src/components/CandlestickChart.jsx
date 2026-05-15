@@ -8,6 +8,7 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
   const pendingJumpRef = useRef([]);
   const latestDataRef = useRef([]);
   const consumedJumpSignalRef = useRef(-1);
+  const savedTimeRangeRef = useRef(null);
 
   function clearPendingJumps() {
     for (const handle of pendingJumpRef.current) {
@@ -23,7 +24,7 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
     const series = seriesRef.current;
     if (!chart || !data || data.length === 0) return;
 
-    const barsToShow = Math.min(data.length, 120);
+    const barsToShow = Math.min(data.length, 30);
     const firstVisibleLogical = Math.max(0, data.length - barsToShow);
     const lastLogical = Math.max(0, data.length - 1);
     const fromTime = data[firstVisibleLogical].time;
@@ -99,8 +100,18 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 8,
-        barSpacing: 8,
+        barSpacing: 10,
         minBarSpacing: 0.05,
+        shiftVisibleRangeOnNewBar: true,
+      },
+      kineticScroll: {
+        touch: true,
+        mouse: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
       },
       rightPriceScale: {
         autoScale: true,
@@ -155,6 +166,14 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
         }))
         .sort((a, b) => a.time - b.time); // strict ascending time order
 
+      // Snapshot the current visible time range and data length before setData.
+      const timeScale = chartRef.current?.timeScale();
+      let prevLogicalRange = null;
+      try {
+        prevLogicalRange = timeScale?.getVisibleLogicalRange();
+      } catch (_) { /* chart not ready */ }
+      const prevDataLen = latestDataRef.current.length;
+
       try {
         seriesRef.current.setData(formattedData);
         latestDataRef.current = formattedData;
@@ -163,6 +182,21 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
           scheduleJumpToLatest();
           consumedJumpSignalRef.current = jumpToLatestSignal;
         } else {
+          const candlesAdded = formattedData.length - prevDataLen;
+
+          if (prevLogicalRange && timeScale && candlesAdded > 0) {
+            // Scroll forward by the number of new candles so the view follows the action.
+            timeScale.setVisibleLogicalRange({
+              from: prevLogicalRange.from + candlesAdded,
+              to: prevLogicalRange.to + candlesAdded,
+            });
+          } else if (prevLogicalRange && timeScale) {
+            // No new candles — restore the exact same visible window.
+            timeScale.setVisibleLogicalRange(prevLogicalRange);
+          } else if (savedTimeRangeRef.current && timeScale) {
+            timeScale.setVisibleLogicalRange(savedTimeRangeRef.current);
+          }
+          
           // Keep user-controlled vertical scale stable when new candles are revealed.
           const rightScale = chartRef.current?.priceScale("right");
           rightScale?.applyOptions({
@@ -188,6 +222,23 @@ function CandlestickChart({ candles, activeSymbol, activeTimeframe, jumpToLatest
       }
     }
   }, [jumpToLatestSignal]);
+
+  // Continuously track the visible logical range so we can restore it after setData.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const timeScale = chart.timeScale();
+    const handler = () => {
+      try {
+        const lr = timeScale.getVisibleLogicalRange();
+        if (lr) savedTimeRangeRef.current = lr;
+      } catch (_) { /* ignore */ }
+    };
+    timeScale.subscribeVisibleLogicalRangeChange(handler);
+    return () => {
+      try { timeScale.unsubscribeVisibleLogicalRangeChange(handler); } catch (_) {}
+    };
+  }, []);
 
   return (
     <div className="chart-shell">

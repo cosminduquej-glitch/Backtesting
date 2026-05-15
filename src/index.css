@@ -140,11 +140,18 @@ body,
   z-index: 130;
 }
 
+/* ── Backtest menu (three-dot button) – draggable ─────────────────────────── */
+
 .backtest-menu-wrap {
   position: absolute;
   left: 10px;
   bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   z-index: 131;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .backtest-menu-btn {
@@ -156,6 +163,18 @@ body,
   color: #d1d4dc;
   font-weight: 700;
   cursor: pointer;
+  touch-action: none;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+
+.backtest-menu-btn-arming {
+  transform: scale(0.9);
+}
+
+.backtest-menu-btn-dragging {
+  transform: scale(1);
+  box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.3);
+  background: rgba(41, 98, 255, 0.18);
 }
 
 .backtest-menu-panel {
@@ -233,6 +252,8 @@ body,
   word-break: break-word;
 }
 
+/* ── "Latest" button – draggable ──────────────────────────────────────────── */
+
 .jump-latest-btn {
   position: absolute;
   right: 12px;
@@ -270,6 +291,8 @@ body,
   background: rgba(41, 98, 255, 0.18);
 }
 
+/* ── Backtest "next candle" arrow button – draggable ──────────────────────── */
+
 .backtest-next-btn {
   position: absolute;
   bottom: calc(14px + env(safe-area-inset-bottom, 0px));
@@ -285,6 +308,12 @@ body,
   font-weight: 700;
   cursor: pointer;
   z-index: 140;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
 }
 
 .backtest-next-btn:disabled {
@@ -292,7 +321,18 @@ body,
   cursor: default;
 }
 
-/* Inside the candlestick chart component */
+.backtest-next-btn-arming {
+  transform: scale(0.9);
+}
+
+.backtest-next-btn-dragging {
+  transform: scale(1) !important;
+  box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.3);
+  background: rgba(41, 98, 255, 0.18);
+}
+
+/* ── Candlestick chart component ─────────────────────────────────────────── */
+
 .chart-shell {
   width: 100%;
   height: 100%;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 
 import CandlestickChart from "./components/CandlestickChart";
 import { fetchCandlesWithFailover, getCachedCandles, TIMEFRAMES } from "./services/marketDataService";
@@ -18,6 +18,18 @@ const ACCESSIBLE_STOCKS = [
   { symbol: "ETHUSD", label: "ETHUSD - Ethereum" },
 ];
 
+const makeDragInitState = () => ({
+  pointerId: null,
+  pressTimer: null,
+  dragActive: false,
+  moved: false,
+  startX: 0,
+  startY: 0,
+  offsetX: 0,
+  offsetY: 0,
+  holdCanceled: false,
+});
+
 function App() {
   const [activeSymbol, setActiveSymbol] = useState("SP500");
   const [activeTimeframe, setActiveTimeframe] = useState("1d");
@@ -36,21 +48,25 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [backtestEnabled, setBacktestEnabled] = useState(false);
   const [backtestFrom, setBacktestFrom] = useState("");
-  const [backtestTo, setBacktestTo] = useState("");
   const [backtestStep, setBacktestStep] = useState(0);
+
+  // --- Refs for the three draggable buttons ---
   const jumpBtnRef = useRef(null);
+  const backtestMenuRef = useRef(null);
+  const nextCandleRef = useRef(null);
   const chartLayoutRef = useRef(null);
-  const dragStateRef = useRef({
-    pointerId: null,
-    pressTimer: null,
-    dragActive: false,
-    moved: false,
-    startX: 0,
-    startY: 0,
-    offsetX: 0,
-    offsetY: 0,
-    holdCanceled: false,
-  });
+
+  // --- Drag state refs (one per draggable) ---
+  const dragStateRef = useRef(makeDragInitState());
+  const menuDragStateRef = useRef(makeDragInitState());
+  const nextCandleDragStateRef = useRef(makeDragInitState());
+  const backtestMaxStepRef = useRef(0);
+
+  // --- Position and visual drag state for backtest menu & next candle buttons ---
+  const [menuBtnPos, setMenuBtnPos] = useState(null);
+  const [menuBtnDragState, setMenuBtnDragState] = useState("idle");
+  const [nextCandlePos, setNextCandlePos] = useState(null);
+  const [nextCandleDragState, setNextCandleDragState] = useState("idle");
 
   const addLog = (msg, type = "info") => {
     const time = new Date().toLocaleTimeString();
@@ -147,26 +163,55 @@ function App() {
 
   useEffect(() => {
     setMenuOpen(false);
-  }, [activeSymbol, activeTimeframe]);
+  }, [activeTimeframe, activeSymbol]);
+
+  useEffect(() => {
+    // Only reset backtest completely if the SYMBOL changes.
+    // If the timeframe changes, we want to stay in backtest mode.
+    setBacktestFrom('');
+    setBacktestEnabled(false);
+  }, [activeSymbol]);
 
   useEffect(() => {
     if (!marketState.candles || marketState.candles.length === 0) return;
     const sorted = [...marketState.candles].sort((a, b) => a.timestamp - b.timestamp);
-    const minDate = new Date(sorted[0].timestamp).toISOString().slice(0, 10);
-    const maxDate = new Date(sorted[sorted.length - 1].timestamp).toISOString().slice(0, 10);
-    setBacktestFrom((prev) => prev || minDate);
-    setBacktestTo((prev) => prev || maxDate);
+    
+    // Default to the last 100 candles for backtesting so there are 50 previous candles to preload.
+    const startIdx = Math.max(0, sorted.length - 100);
+    const defaultFromDate = new Date(sorted[startIdx].timestamp).toISOString().slice(0, 10);
+    
+    setBacktestFrom((prev) => prev || defaultFromDate);
   }, [marketState.candles]);
 
+  // Auto-correct backtestFrom if user selects a date older than available data
+  useEffect(() => {
+    if (!backtestEnabled || !backtestFrom || !marketState.candles || marketState.candles.length === 0) return;
+    const sorted = [...marketState.candles].sort((a, b) => a.timestamp - b.timestamp);
+    const fromMs = new Date(`${backtestFrom}T00:00:00Z`).getTime();
+    
+    // If the selected date is older than the very first available candle
+    if (fromMs < sorted[0].timestamp) {
+      // 50 candles are needed for preload, so the earliest functional start date is index 50
+      const oldestValidIdx = Math.min(50, sorted.length - 1);
+      const oldestValidDate = new Date(sorted[oldestValidIdx].timestamp).toISOString().slice(0, 10);
+      
+      // Only set if different to avoid infinite loops
+      if (backtestFrom !== oldestValidDate) {
+        setBacktestFrom(oldestValidDate);
+        addLog(`Requested date too old. Snapping to oldest available: ${oldestValidDate}`, 'warning');
+      }
+    }
+  }, [backtestFrom, backtestEnabled, marketState.candles]);
+
+  // --- Cleanup drag listeners on unmount ---
   useEffect(() => {
     return () => {
-      const state = dragStateRef.current;
-      if (state.pressTimer) {
-        window.clearTimeout(state.pressTimer);
-      }
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerUp);
+      [dragStateRef, menuDragStateRef, nextCandleDragStateRef].forEach((ref) => {
+        const state = ref.current;
+        if (state.pressTimer) {
+          window.clearTimeout(state.pressTimer);
+        }
+      });
     };
   }, []);
 
@@ -182,95 +227,104 @@ function App() {
     };
   };
 
-  const handlePointerMove = (event) => {
-    const state = dragStateRef.current;
-    if (state.pointerId !== event.pointerId || !jumpBtnRef.current || !chartLayoutRef.current) return;
-
-    if (!state.dragActive) {
-      // Cancel long-press arm if user moves finger before drag is active.
-      const dx = event.clientX - state.startX;
-      const dy = event.clientY - state.startY;
-      const movedDistance = Math.hypot(dx, dy);
-      if (movedDistance > 10) {
-        state.holdCanceled = true;
-        if (state.pressTimer) {
-          window.clearTimeout(state.pressTimer);
-          state.pressTimer = null;
+  /**
+   * Generic factory that returns { onPointerDown, onContextMenu } props for any
+   * draggable floating button.  Works identically to the existing "Latest" button
+   * drag: long-press (350 ms) arms drag mode, then pointer-move repositions.
+   *
+   * @param {React.RefObject} elRef        - ref attached to the DOM element
+   * @param {React.MutableRefObject} stRef  - ref holding per-button drag state
+   * @param {Function} setPos              - state setter for { left, top }
+   * @param {Function} setVisualState      - state setter for "idle"/"arming"/"dragging"
+   * @param {Function} onTap               - called on short tap (no drag)
+   */
+  const makeDragHandlers = useCallback((elRef, stRef, setPos, setVisualState, onTap) => {
+    const handleMove = (event) => {
+      const state = stRef.current;
+      if (state.pointerId !== event.pointerId || !elRef.current || !chartLayoutRef.current) return;
+      if (!state.dragActive) {
+        const dx = event.clientX - state.startX;
+        const dy = event.clientY - state.startY;
+        if (Math.hypot(dx, dy) > 10) {
+          state.holdCanceled = true;
+          if (state.pressTimer) { window.clearTimeout(state.pressTimer); state.pressTimer = null; }
+          setVisualState("idle");
         }
-        setJumpBtnDragState("idle");
+        return;
       }
-      return;
-    }
+      const containerRect = chartLayoutRef.current.getBoundingClientRect();
+      const rect = elRef.current.getBoundingClientRect();
+      const nextX = event.clientX - containerRect.left - state.offsetX;
+      const nextY = event.clientY - containerRect.top - state.offsetY;
+      const clamped = clampToContainer(nextX, nextY, rect.width, rect.height);
+      setPos({ left: clamped.x, top: clamped.y });
+      state.moved = true;
+    };
 
-    const containerRect = chartLayoutRef.current.getBoundingClientRect();
-    const rect = jumpBtnRef.current.getBoundingClientRect();
-    const nextX = event.clientX - containerRect.left - state.offsetX;
-    const nextY = event.clientY - containerRect.top - state.offsetY;
-    const clamped = clampToContainer(nextX, nextY, rect.width, rect.height);
-    setJumpBtnPos({ left: clamped.x, top: clamped.y });
-    state.moved = true;
-  };
-
-  const handlePointerUp = (event) => {
-    const state = dragStateRef.current;
-    if (state.pointerId !== event.pointerId) return;
-
-    if (state.pressTimer) {
-      window.clearTimeout(state.pressTimer);
-      state.pressTimer = null;
-    }
-
-    const wasDragging = state.dragActive;
-    state.dragActive = false;
-    setJumpBtnDragState("idle");
-    state.pointerId = null;
-    window.removeEventListener("pointermove", handlePointerMove);
-    window.removeEventListener("pointerup", handlePointerUp);
-    window.removeEventListener("pointercancel", handlePointerUp);
-
-    if (!wasDragging && !state.moved && !state.holdCanceled) {
-      setJumpToLatestSignal((prev) => prev + 1);
-    }
-    state.holdCanceled = false;
-  };
-
-  const handleJumpBtnPointerDown = (event) => {
-    if (!jumpBtnRef.current || !chartLayoutRef.current) return;
-    event.preventDefault();
-    const state = dragStateRef.current;
-    const containerRect = chartLayoutRef.current.getBoundingClientRect();
-    const rect = jumpBtnRef.current.getBoundingClientRect();
-
-    state.pointerId = event.pointerId;
-    state.dragActive = false;
-    state.moved = false;
-    state.holdCanceled = false;
-    setJumpBtnDragState("arming");
-    state.startX = event.clientX;
-    state.startY = event.clientY;
-    state.offsetX = event.clientX - rect.left;
-    state.offsetY = event.clientY - rect.top;
-
-    if (state.pressTimer) {
-      window.clearTimeout(state.pressTimer);
-    }
-
-    state.pressTimer = window.setTimeout(() => {
-      if (state.holdCanceled || state.pointerId !== event.pointerId) return;
-      state.dragActive = true;
-      setJumpBtnDragState("dragging");
-      if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
-        navigator.vibrate(20);
+    const handleUp = (event) => {
+      const state = stRef.current;
+      if (state.pointerId !== event.pointerId) return;
+      if (state.pressTimer) { window.clearTimeout(state.pressTimer); state.pressTimer = null; }
+      const wasDragging = state.dragActive;
+      state.dragActive = false;
+      setVisualState("idle");
+      state.pointerId = null;
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+      if (!wasDragging && !state.moved && !state.holdCanceled && onTap) {
+        onTap();
       }
-      if (jumpBtnRef.current) {
-        jumpBtnRef.current.setPointerCapture?.(event.pointerId);
-      }
-    }, 350);
+      state.holdCanceled = false;
+    };
 
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerUp);
-  };
+    const onPointerDown = (event) => {
+      if (!elRef.current || !chartLayoutRef.current) return;
+      event.preventDefault();
+      const state = stRef.current;
+      const rect = elRef.current.getBoundingClientRect();
+      state.pointerId = event.pointerId;
+      state.dragActive = false;
+      state.moved = false;
+      state.holdCanceled = false;
+      setVisualState("arming");
+      state.startX = event.clientX;
+      state.startY = event.clientY;
+      state.offsetX = event.clientX - rect.left;
+      state.offsetY = event.clientY - rect.top;
+      if (state.pressTimer) window.clearTimeout(state.pressTimer);
+      state.pressTimer = window.setTimeout(() => {
+        if (state.holdCanceled || state.pointerId !== event.pointerId) return;
+        state.dragActive = true;
+        setVisualState("dragging");
+        if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") navigator.vibrate(20);
+        elRef.current?.setPointerCapture?.(event.pointerId);
+      }, 350);
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+    };
+
+    return { onPointerDown, onContextMenu: (e) => e.preventDefault() };
+  }, []);
+
+  // --- Build drag props for each draggable button ---
+  const jumpBtnDragProps = useMemo(
+    () => makeDragHandlers(jumpBtnRef, dragStateRef, setJumpBtnPos, setJumpBtnDragState, () => setJumpToLatestSignal((p) => p + 1)),
+    [makeDragHandlers]
+  );
+
+  const menuBtnDragProps = useMemo(
+    () => makeDragHandlers(backtestMenuRef, menuDragStateRef, setMenuBtnPos, setMenuBtnDragState, () => setMenuOpen((p) => !p)),
+    [makeDragHandlers]
+  );
+
+  const nextCandleDragProps = useMemo(
+    () => makeDragHandlers(nextCandleRef, nextCandleDragStateRef, setNextCandlePos, setNextCandleDragState, () => {
+      setBacktestStep((prev) => Math.min(prev + 1, backtestMaxStepRef.current));
+    }),
+    [makeDragHandlers]
+  );
 
   const backtestContext = useMemo(() => {
     if (!backtestEnabled || !marketState.candles || marketState.candles.length === 0) {
@@ -279,18 +333,18 @@ function App() {
 
     const sorted = [...marketState.candles].sort((a, b) => a.timestamp - b.timestamp);
     const fromMs = backtestFrom ? new Date(`${backtestFrom}T00:00:00Z`).getTime() : Number.NEGATIVE_INFINITY;
-    const toMs = backtestTo ? new Date(`${backtestTo}T23:59:59Z`).getTime() : Number.POSITIVE_INFINITY;
 
-    const firstIdx = sorted.findIndex((c) => c.timestamp >= fromMs && c.timestamp <= toMs);
+    let firstIdx = sorted.findIndex((c) => c.timestamp >= fromMs);
     if (firstIdx === -1) return { baseCandles: [], forwardCandles: [], maxStep: 0 };
 
-    let lastIdx = -1;
-    for (let i = sorted.length - 1; i >= 0; i -= 1) {
-      if (sorted[i].timestamp <= toMs) {
-        lastIdx = i;
-        break;
-      }
+    // Force at least 50 candles of preload history if the dataset is large enough.
+    // This fixes the 1min timeframe issue where the selected date is often the very first 
+    // day of available data, leaving 0 historical candles to preload.
+    if (firstIdx < 50 && sorted.length > 50) {
+      firstIdx = 50;
     }
+
+    let lastIdx = sorted.length - 1;
     if (lastIdx < firstIdx) return { baseCandles: [], forwardCandles: [], maxStep: 0 };
 
     // Load extra context before start date so chart does not look empty at start.
@@ -303,14 +357,43 @@ function App() {
       forwardCandles,
       maxStep: forwardCandles.length,
     };
-  }, [backtestEnabled, backtestFrom, backtestTo, marketState.candles]);
+  }, [backtestEnabled, backtestFrom, marketState.candles]);
 
   const backtestMaxStep = backtestContext.maxStep;
+  backtestMaxStepRef.current = backtestMaxStep;
 
   useEffect(() => {
     if (!backtestEnabled) return;
     setBacktestStep(0);
-  }, [backtestEnabled, backtestFrom, backtestTo, activeSymbol, activeTimeframe]);
+    // Jump chart to show the new backtest date range.
+    setJumpToLatestSignal((prev) => prev + 1);
+  }, [backtestEnabled, backtestFrom, activeSymbol]);
+
+  const lastViewedTimestampRef = useRef(null);
+
+  const pendingSyncTimestampRef = useRef(null);
+
+  useEffect(() => {
+    if (activeTimeframe && backtestEnabled) {
+      pendingSyncTimestampRef.current = lastViewedTimestampRef.current;
+    }
+  }, [activeTimeframe, backtestEnabled]);
+
+  // Recalculate backtestStep to maintain the exact chronological time when new candles arrive
+  useEffect(() => {
+    if (pendingSyncTimestampRef.current && backtestEnabled && backtestContext.forwardCandles.length > 0) {
+      let newStep = 0;
+      for (let i = 0; i < backtestContext.forwardCandles.length; i++) {
+        if (backtestContext.forwardCandles[i].timestamp <= pendingSyncTimestampRef.current) {
+          newStep = i + 1;
+        } else {
+          break;
+        }
+      }
+      setBacktestStep(newStep);
+      pendingSyncTimestampRef.current = null;
+    }
+  }, [backtestContext.forwardCandles, backtestEnabled]);
 
   const displayedCandles = useMemo(() => {
     if (!backtestEnabled) return marketState.candles;
@@ -322,12 +405,13 @@ function App() {
     ];
   }, [backtestEnabled, marketState.candles, backtestContext, backtestStep, backtestMaxStep]);
 
-  const handleNextBacktestCandle = () => {
-    setBacktestStep((prev) => {
-      const next = Math.min(prev + 1, backtestMaxStep);
-      return next;
-    });
-  };
+  useEffect(() => {
+    if (backtestEnabled && displayedCandles && displayedCandles.length > 0) {
+      lastViewedTimestampRef.current = displayedCandles[displayedCandles.length - 1].timestamp;
+    }
+  }, [displayedCandles, backtestEnabled]);
+
+  // handleNextBacktestCandle is now handled via nextCandleDragProps tap callback.
 
   return (
     <main className="trading-view-shell">
@@ -350,10 +434,15 @@ function App() {
       </header>
 
       <section className="fullscreen-chart-layout" ref={chartLayoutRef}>
-        <div className="backtest-menu-wrap">
+        <div
+          className="backtest-menu-wrap"
+          ref={backtestMenuRef}
+          style={menuBtnPos ? { left: `${menuBtnPos.left}px`, top: `${menuBtnPos.top}px`, bottom: "auto" } : undefined}
+        >
           <button
-            className="backtest-menu-btn"
-            onClick={() => setMenuOpen((prev) => !prev)}
+            className={`backtest-menu-btn backtest-menu-btn-${menuBtnDragState}`}
+            onPointerDown={menuBtnDragProps.onPointerDown}
+            onContextMenu={menuBtnDragProps.onContextMenu}
             aria-label="Backtest menu"
           >
             ...
@@ -382,14 +471,6 @@ function App() {
                 type="date"
                 value={backtestFrom}
                 onChange={(e) => setBacktestFrom(e.target.value)}
-              />
-            </label>
-            <label>
-              Bis
-              <input
-                type="date"
-                value={backtestTo}
-                onChange={(e) => setBacktestTo(e.target.value)}
               />
             </label>
           </div>
@@ -422,8 +503,8 @@ function App() {
           ref={jumpBtnRef}
           className={`jump-latest-btn jump-latest-btn-${jumpBtnDragState}`}
           style={jumpBtnPos ? { left: `${jumpBtnPos.left}px`, top: `${jumpBtnPos.top}px`, right: "auto", bottom: "auto" } : undefined}
-          onPointerDown={handleJumpBtnPointerDown}
-          onContextMenu={(event) => event.preventDefault()}
+          onPointerDown={jumpBtnDragProps.onPointerDown}
+          onContextMenu={jumpBtnDragProps.onContextMenu}
           aria-label="Jump to latest candle"
         >
           Latest
@@ -431,8 +512,11 @@ function App() {
 
         {backtestEnabled && backtestContext.baseCandles.length > 0 && (
           <button
-            className="backtest-next-btn"
-            onClick={handleNextBacktestCandle}
+            ref={nextCandleRef}
+            className={`backtest-next-btn backtest-next-btn-${nextCandleDragState}`}
+            style={nextCandlePos ? { left: `${nextCandlePos.left}px`, top: `${nextCandlePos.top}px`, right: "auto", bottom: "auto" } : undefined}
+            onPointerDown={nextCandleDragProps.onPointerDown}
+            onContextMenu={nextCandleDragProps.onContextMenu}
             disabled={backtestStep >= backtestMaxStep}
             aria-label="Nächste Kerze"
           >

@@ -43,12 +43,11 @@ function resolveSymbol(input) {
 // Each timeframe maps to Yahoo interval + range values
 
 export const TIMEFRAMES = [
-  { id: '1m',  label: '1m',  yahooInterval: '1m',  yahooRange: '1d',  finnhubRes: '1'  },
-  { id: '5m',  label: '5m',  yahooInterval: '5m',  yahooRange: '5d',  finnhubRes: '5'  },
-  { id: '15m', label: '15m', yahooInterval: '15m', yahooRange: '5d',  finnhubRes: '15' },
-  { id: '30m', label: '30m', yahooInterval: '30m', yahooRange: '1mo', finnhubRes: '30' },
-  { id: '1h',  label: '1H',  yahooInterval: '1h',  yahooRange: '1y',  finnhubRes: '60' },
-  { id: '4h',  label: '4H',  yahooInterval: '1h',  yahooRange: '2y',  finnhubRes: '240' },
+  { id: '1m',  label: '1m',  yahooInterval: '1m',  yahooRange: '7d',  finnhubRes: '1'  },
+  { id: '5m',  label: '5m',  yahooInterval: '5m',  yahooRange: '60d',  finnhubRes: '5'  },
+  { id: '15m', label: '15m', yahooInterval: '15m', yahooRange: '60d',  finnhubRes: '15' },
+  { id: '30m', label: '30m', yahooInterval: '30m', yahooRange: '60d', finnhubRes: '30' },
+  { id: '1h',  label: '1H',  yahooInterval: '1h',  yahooRange: '730d',  finnhubRes: '60' },
   { id: '1d',  label: '1D',  yahooInterval: '1d',  yahooRange: 'max', finnhubRes: 'D'  },
   { id: '1wk', label: '1W',  yahooInterval: '1wk', yahooRange: 'max', finnhubRes: 'W'  },
 ];
@@ -256,15 +255,16 @@ async function fetchFromAlphaVantage(symbol, tf) {
   const key = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
   if (!key) throw new Error('Missing Alpha Vantage API key');
 
-  // Alpha Vantage only supports daily for free tier
+  // Alpha Vantage only supports daily and weekly for free tier
   if (tf.yahooInterval !== '1d' && tf.yahooInterval !== '1wk') {
-    throw new Error('Alpha Vantage free tier only supports daily');
+    throw new Error('Alpha Vantage free tier only supports daily and weekly');
   }
 
-  const endpoint = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(symbol)}&outputsize=compact&apikey=${encodeURIComponent(key)}`;
+  const fn = tf.yahooInterval === '1wk' ? 'TIME_SERIES_WEEKLY' : 'TIME_SERIES_DAILY';
+  const endpoint = `https://www.alphavantage.co/query?function=${fn}&symbol=${encodeURIComponent(symbol)}&outputsize=compact&apikey=${encodeURIComponent(key)}`;
   const payload = await httpGetJson(endpoint);
 
-  const series = payload && (payload['Time Series (Daily)'] || payload['Time Series Daily']);
+  const series = payload && (payload['Time Series (Daily)'] || payload['Time Series Daily'] || payload['Weekly Time Series']);
   if (!series || typeof series !== 'object') {
     throw new Error('No Alpha Vantage time series returned');
   }
@@ -295,14 +295,15 @@ async function fetchFromAlphaVantage(symbol, tf) {
 // ── Provider: Stooq ───────────────────────────────────────────────────────────
 
 async function fetchFromStooq(symbol, tf) {
-  // Stooq only supports daily
+  // Stooq only supports daily and weekly
   if (tf.yahooInterval !== '1d' && tf.yahooInterval !== '1wk') {
-    throw new Error('Stooq only supports daily data');
+    throw new Error('Stooq only supports daily and weekly data');
   }
 
   let s = symbol.toLowerCase();
   if (!s.includes('.')) s = `${s}.us`;
-  const endpoint = `https://stooq.com/q/d/l/?s=${encodeURIComponent(s)}&i=d`;
+  const stooqInterval = tf.yahooInterval === '1wk' ? 'w' : 'd';
+  const endpoint = `https://stooq.com/q/d/l/?s=${encodeURIComponent(s)}&i=${stooqInterval}`;
   const text = await httpGetText(endpoint, { Accept: 'text/csv' });
   if (!text || !text.trim()) throw new Error('No data from Stooq');
 
